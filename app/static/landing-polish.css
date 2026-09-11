@@ -1,0 +1,76 @@
+/* Final responsive balance for the get-started and early call-to-action sections. */
+.actions {
+  padding-bottom: 38px;
+}
+
+.early-cta {
+  box-sizing: border-box;
+  width: calc(100% - 56px);
+  max-width: 1124px;
+  margin: 0 auto 80px;
+  padding: 34px 44px;
+  gap: 44px;
+  border-radius: 20px;
+}
+
+.early-cta h2 {
+  margin-top: 7px;
+  font-size: clamp(1.85rem, 3vw, 2.55rem);
+  line-height: 1.08;
+}
+
+.early-cta > div:last-child p {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.early-cta .land-button,
+.early-cta .cta-signin summary {
+  box-sizing: border-box;
+  min-height: 46px;
+  padding: 12px 18px;
+  font-size: .88rem;
+}
+
+.cta-actions {
+  gap: 10px;
+}
+
+@media (max-width: 700px) {
+  .actions {
+    padding-bottom: 26px;
+  }
+
+  .early-cta {
+    width: auto;
+    margin: 0 20px 55px;
+    padding: 28px 22px;
+    gap: 14px;
+    border-radius: 18px;
+  }
+
+  .early-cta h2 {
+    font-size: clamp(1.75rem, 9vw, 2rem);
+  }
+
+  .early-cta > div:last-child p {
+    margin-bottom: 15px;
+  }
+
+  .cta-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .early-cta .land-button,
+  .early-cta .cta-signin,
+  .early-cta .cta-signin summary {
+    width: 100%;
+  }
+
+  .early-cta .land-button,
+  .early-cta .cta-signin summary {
+    justify-content: center;
+    text-align: center;
+  }
+}

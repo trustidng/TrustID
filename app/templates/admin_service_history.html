@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block content %}
+<div class="crumbs"><a href="/admin/security">Security</a><span>›</span><strong>Service history</strong></div>
+<div class="history-intro service-history-intro">
+  <div><p class="eyebrow">Accountability</p><h1>Service status history</h1><p>Review service availability changes and the administrators responsible for them.</p></div>
+  <a class="button secondary" href="/admin/security">Back to Security</a>
+</div>
+<form class="service-history-filters" method="get">
+  <label>Service<select name="service"><option value="">All services</option><option value="NATIONAL_ID" {% if filters.service=='NATIONAL_ID' %}selected{% endif %}>National identity service</option><option value="DRIVING_LICENCE" {% if filters.service=='DRIVING_LICENCE' %}selected{% endif %}>Driving licence service</option><option value="SMS" {% if filters.service=='SMS' %}selected{% endif %}>SMS delivery service</option><option value="USSD" {% if filters.service=='USSD' %}selected{% endif %}>USSD service</option></select></label>
+  <label>New status<select name="status"><option value="">All statuses</option><option value="AVAILABLE" {% if filters.status=='AVAILABLE' %}selected{% endif %}>Available</option><option value="UNAVAILABLE" {% if filters.status=='UNAVAILABLE' %}selected{% endif %}>Unavailable</option></select></label>
+  <label>Administrator<input type="search" name="administrator" value="{{filters.administrator}}" placeholder="Username"></label>
+  <label>From<input type="date" name="date_from" value="{{filters.date_from}}"></label><label>To<input type="date" name="date_to" value="{{filters.date_to}}"></label>
+  <label>Sort by<select name="sort"><option value="newest" {% if filters.sort=='newest' %}selected{% endif %}>Newest first</option><option value="oldest" {% if filters.sort=='oldest' %}selected{% endif %}>Oldest first</option></select></label>
+  <div class="filter-actions"><button>Apply filters</button><a href="/admin/security/services/history">Clear</a></div>
+</form>
+<div class="results-summary"><strong>{{service_history|length}} recorded changes</strong><span>{{'Oldest changes first' if filters.sort=='oldest' else 'Most recent changes first'}}</span></div>
+{% if service_history %}<div class="table-shell"><table class="history-table service-audit-table">
+  <thead><tr><th>Time</th><th>Service</th><th>Change</th><th>Reason</th><th>Administrator</th></tr></thead>
+  <tbody>{% for item in service_history %}<tr><td data-label="Time">{{item.timestamp.strftime('%d %b %Y, %H:%M')}}</td><td data-label="Service"><strong>{{item.target_reference.replace('_',' ').title()}}</strong></td><td data-label="Change">{{(item.change.previous_status or 'Not recorded').replace('_',' ').title()}} → <strong>{{(item.change.status or 'Unknown').replace('_',' ').title()}}</strong></td><td data-label="Reason">{{item.change.reason or '—'}}</td><td data-label="Administrator">{{item.username or 'Former administrator'}}</td></tr>{% endfor %}</tbody>
+</table></div>{% else %}<div class="empty-state"><h2>No matching service changes</h2><p>Adjust or clear the filters to view other service activity.</p><a class="button secondary" href="/admin/security/services/history">Clear filters</a></div>{% endif %}
+{% endblock %}

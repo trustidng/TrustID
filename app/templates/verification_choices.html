@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block content %}
+<div class="crumbs"><a href="/organisation">Dashboard</a><span>›</span><strong>Choose verification</strong></div>
+<div class="page-intro"><p class="eyebrow">Step 1 of 4</p><h1>What would you like to verify?</h1><p>Only options permitted for {{organisation.category_name}} are shown.</p></div>
+{% if claims %}<div class="choice-grid">{% for claim in claims %}<a class="choice-card" href="/organisation/verifications/new/{{claim.claim_code}}"><div class="choice-icon">{{'↗' if claim.action_type=='REQUEST' else '✓'}}</div><div><h2>{{claim.display_name}}</h2><p>{{claim.description}}</p>{% if claim.approval_required %}<span class="approval-badge">Citizen approval required</span>{% endif %}</div><span class="choice-arrow">→</span></a>{% endfor %}</div>{% else %}<div class="empty-state"><h2>No verification options available</h2><p>Your category currently has no active claim permissions.</p></div>{% endif %}
+{% endblock %}

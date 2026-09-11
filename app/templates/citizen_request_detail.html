@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="crumbs"><a href="/citizen">Citizen account</a><span>›</span><strong>Review request</strong></div>
+<div class="consent-shell">
+  <header class="page-intro"><p class="eyebrow">Information request</p><h1>Review this request</h1><p>Check who is making the request and why it is needed.</p></header>
+  <div class="consent-cards">
+    <section class="card"><p class="eyebrow">Requesting organization</p><h2>{{item.business_name}}</h2></section>
+    <section class="card">
+      <p class="eyebrow">Information requested</p><h2>{{item.display_name}}</h2>
+      {% if item.binary_verification %}
+      <p>{{item.business_name}} wants to confirm whether your registered residence matches <strong>{{item.requested_location}}</strong>.</p>
+      <p>Only the match result will be returned. Your registered address will not be displayed.</p>
+      {% else %}<p>Only this information will be provided if you approve.</p>{% endif %}
+    </section>
+    <section class="card"><p class="eyebrow">Purpose</p><h2>Why it is needed</h2><p>{{item.purpose}}</p></section>
+    <section class="card">
+      <p class="eyebrow">Request validity</p><h2>{{'Awaiting your decision' if item.status=='PENDING' else ('Declined' if item.status=='REJECTED' else item.status.title())}}</h2>
+      <p>{% if item.status=='PENDING' %}Respond by {{item.expires_display}}.{% elif item.status=='APPROVED' %}You approved this request on {{item.resolved_display}}.{% elif item.status=='REJECTED' %}You declined this request on {{item.resolved_display}}.{% else %}This request expired before a decision was made.{% endif %}</p>
+    </section>
+  </div>
+  {% if item.status=='PENDING' %}<div class="consent-actions"><a class="button" href="/citizen/requests/{{item.id}}/approve">Approve request</a><a class="button danger-outline" href="/citizen/requests/{{item.id}}/decline">Decline request</a></div>{% else %}<a class="button secondary" href="/citizen">Back to requests</a>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "phone_base.html" %}{% block phone_title %}TrustID USSD{% endblock %}{% block phone_content %}
+<div class="ussd-dialog" role="dialog" aria-labelledby="ussd-title">
+  <div class="ussd-copy">
+    <strong id="ussd-title">TrustID</strong>
+    {% if error %}<p class="ussd-error">{{error}}</p>{% endif %}
+    {% if step=='message' %}
+      <p>{{ussd_message}}</p>
+    {% elif step=='menu' %}
+      <p>{% if account_active %}Welcome back to TrustID{% else %}Welcome to TrustID{% endif %}</p>
+      <p>1. {% if account_active %}Sign in{% else %}Activate account{% endif %}<br>2. Exit</p>
+    {% elif step=='prompt' %}
+      <p>{{prompt}}</p>
+      <p>0. {{navigation_label or 'Back'}}</p>
+    {% elif step=='consent' %}
+      <p>{{prompt}}</p>
+      <p>{% for option in options %}{{option}}{% if not loop.last %}<br>{% endif %}{% endfor %}</p>
+    {% endif %}
+  </div>
+  {% if step in ('menu','prompt','consent') %}
+    <form method="post" action="/phone/ussd/respond" autocomplete="off">
+      <input type="hidden" name="ussd_token" value="{{ussd_token}}">
+      <label class="sr-only" for="ussd-response">{% if step=='menu' %}Enter option{% else %}{{input_label}}{% endif %}</label>
+      <input id="ussd-response" name="response" inputmode="numeric" {% if step=='prompt' %}type="password"{% endif %} required autofocus>
+      <div class="ussd-actions">
+        <button type="submit" formaction="/phone/ussd/cancel" formnovalidate>CANCEL</button>
+        <button type="submit">SEND</button>
+      </div>
+    </form>
+  {% else %}
+    <div class="ussd-actions"><a href="/phone/dialer">CLOSE</a></div>
+  {% endif %}
+</div>
+{% endblock %}
