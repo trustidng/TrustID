@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TrustID offline verification — {{reference}}</title>
+  <style>
+    :root{color-scheme:light;--navy:#082d49;--green:#078453;--red:#bb2d23;--amber:#9a6500;--line:#cfdee7;--bg:#eef4f7}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--navy);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+    main{width:min(850px,calc(100% - 32px));margin:32px auto;background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 18px 50px #082d4915}
+    header{display:flex;justify-content:space-between;gap:20px;padding:24px 28px;border-top:6px solid var(--green);border-bottom:1px solid var(--line)}
+    .brand{font-size:1.2rem;font-weight:800}.brand span{display:block;color:#587287;font-size:.72rem;font-weight:650}
+    .offline{text-align:right;text-transform:uppercase;letter-spacing:.08em;font-size:.72rem;font-weight:800}
+    .hero{padding:30px 28px;color:#fff;background:linear-gradient(120deg,#075b43,#0aa66b)}.hero.invalid{background:linear-gradient(120deg,#8f201a,#d1372c)}.hero.expired{background:linear-gradient(120deg,#805400,#bd7b00)}
+    .hero p{margin:0 0 5px;text-transform:uppercase;letter-spacing:.08em;font-size:.72rem;font-weight:800}.hero h1{margin:0;font-size:2rem}.hero span{display:block;margin-top:8px}
+    .body{padding:26px 28px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}.field{padding:13px 16px;border-bottom:1px solid var(--line)}.field:nth-child(odd){border-right:1px solid var(--line)}.field small{display:block;color:#60798c}.field strong{overflow-wrap:anywhere}
+    .key{margin-top:20px;padding:16px;background:#f3f8fa;border-left:4px solid #1688b5}.key code{display:block;margin-top:6px;font-size:.78rem;overflow-wrap:anywhere}
+    .notice{margin-top:20px;padding:16px;border:1px solid #e6d19b;background:#fff8e4;border-radius:10px}.notice strong{display:block}
+    footer{padding:16px 28px;border-top:1px solid var(--line);color:#60798c;font-size:.8rem}
+    @media(max-width:620px){header{align-items:flex-start}.grid{grid-template-columns:1fr}.field:nth-child(odd){border-right:0}}
+  </style>
+</head>
+<body>
+<main>
+  <header><div class="brand">TrustID<span>Privacy-preserving verification</span></div><div class="offline">Offline signature check<br><span id="checked-at"></span></div></header>
+  <section class="hero" id="hero"><p>Cryptographic verification</p><h1 id="status">Checking signed receipt…</h1><span id="explanation">This check uses only the information contained in this file.</span></section>
+  <section class="body">
+    <div class="grid">
+      <div class="field"><small>Verification reference</small><strong id="verification-reference">—</strong></div>
+      <div class="field"><small>Recorded result</small><strong id="result">—</strong></div>
+      <div class="field"><small>Verification claim</small><strong id="claim">—</strong></div>
+      <div class="field"><small>Requirement</small><strong id="condition">—</strong></div>
+      <div class="field"><small>Organization reference</small><strong id="organization-reference">—</strong></div>
+      <div class="field"><small>Citizen reference</small><strong id="citizen-reference">—</strong></div>
+      <div class="field"><small>Issued</small><strong id="issued">—</strong></div>
+      <div class="field"><small>Valid until</small><strong id="expires">—</strong></div>
+    </div>
+    <div class="key"><strong>Signing key fingerprint (SHA-256)</strong><code id="fingerprint">—</code></div>
+    <div class="notice"><strong>What offline verification proves</strong><span>A valid result proves that the signed receipt content has not changed since it was issued with the displayed Ed25519 key. Confirm the key fingerprint through a trusted TrustID publication. This offline file cannot learn about a key or receipt revoked after the file was downloaded.</span></div>
+  </section>
+  <footer>Self-contained TrustID offline verifier · No network connection or personal source record is used.</footer>
+</main>
+<script>
+const material={{material|tojson}};
+const expectedFields=["verification_id","issuer","claim","condition","result","organisation_id","subject_reference","issued_at","expires_at"];
+const byId=id=>document.getElementById(id);
+const bytes=value=>Uint8Array.from(atob(value),character=>character.charCodeAt(0));
+const hex=value=>Array.from(new Uint8Array(value),byte=>byte.toString(16).padStart(2,"0")).join("");
+const show=(id,value)=>{byId(id).textContent=value};
+
+async function verify(){
+  show("checked-at",new Date().toLocaleString());
+  try{
+    if(material.format!=="trustid-offline-receipt-v1"||material.algorithm!=="Ed25519")throw new Error("Unsupported verification package");
+    const payload=JSON.parse(material.canonical_payload);
+    if(Object.keys(payload).sort().join("|")!==expectedFields.slice().sort().join("|")||payload.issuer!=="TrustID")throw new Error("Invalid signed payload structure");
+    const publicKey=bytes(material.public_key_b64);
+    const calculatedFingerprint=hex(await crypto.subtle.digest("SHA-256",publicKey));
+    if(calculatedFingerprint!==material.public_key_sha256)throw new Error("Signing-key fingerprint mismatch");
+    const key=await crypto.subtle.importKey("raw",publicKey,{name:"Ed25519"},false,["verify"]);
+    const valid=await crypto.subtle.verify({name:"Ed25519"},key,bytes(material.signature_b64),new TextEncoder().encode(material.canonical_payload));
+    if(!valid)throw new Error("Signature verification failed");
+    const expired=new Date(payload.expires_at).getTime()<=Date.now();
+    byId("hero").classList.add(expired?"expired":"current");
+    show("status",expired?"Authentic but expired":"Authentic and current");
+    show("explanation",expired?"The signature is valid and the content is unchanged, but the validity period has ended.":"The signature is valid, the content is unchanged and the receipt is within its stated validity period.");
+    show("verification-reference",payload.verification_id);
+    show("result",payload.result==="CONDITION_SATISFIED"?"Requirement met":"Requirement not met");
+    show("claim",payload.claim.replaceAll("_"," "));
+    show("condition",payload.condition.replaceAll("_"," "));
+    show("organization-reference",payload.organisation_id);
+    show("citizen-reference",payload.subject_reference);
+    show("issued",new Date(payload.issued_at).toLocaleString());
+    show("expires",new Date(payload.expires_at).toLocaleString());
+    show("fingerprint",calculatedFingerprint);
+  }catch(error){
+    byId("hero").classList.add("invalid");
+    show("status","Verification failed");
+    show("explanation",error&&error.message?error.message:"This browser could not verify the receipt.");
+    show("fingerprint",material.public_key_sha256||"Unavailable");
+  }
+}
+verify();
+</script>
+</body>
+</html>

@@ -6,7 +6,10 @@ import re
 import mysql.connector
 
 from .auth import audit, utcnow_naive
-from .abuse import BLOCK_MESSAGE, acquire_age_guard, finalize_age_attempt, reserve_age_attempt
+from .abuse import (
+    BLOCK_MESSAGE, acquire_inference_guard, condition_fingerprint,
+    finalize_inference_attempt, reserve_inference_attempt,
+)
 from .db import execute, fetch_one
 from .policy import PolicyDecisionCode, PolicyEngine
 from .security import digest_token, mask_phone, new_token
@@ -43,6 +46,11 @@ ADMIN_FAILURE_REASONS = {
 }
 SAFE_PURPOSE_RE = re.compile(r"^[\w\s.,'’&()/\-]{10,180}$", re.UNICODE)
 IDENTIFIER_IN_PURPOSE_RE = re.compile(r"(?:\+?234|0)\d{10}|\b\d{10,11}\b|\bLIC[-\s]?\d{6,}\b", re.I)
+INFERENCE_FAMILY_BY_CLAIM = {
+    ClaimCode.AGE_COMPARE: "AGE",
+    ClaimCode.NAME_MATCH: "NAME_MATCH",
+    ClaimCode.REGISTERED_RESIDENCE: "RESIDENCE",
+}
 
 
 @dataclass(frozen=True)
@@ -222,8 +230,9 @@ def public_reference() -> str:
 
 def submit_request(conn, organisation_id: int, token: str, prepared: PreparedRequest,
                    policy_engine=None, verification_engine=None) -> tuple[int | None, str | None]:
-    if prepared.claim == ClaimCode.AGE_COMPARE:
-        acquire_age_guard(conn, organisation_id, prepared.identifier)
+    inference_family = INFERENCE_FAMILY_BY_CLAIM.get(prepared.claim)
+    if inference_family:
+        acquire_inference_guard(conn, organisation_id, prepared.identifier, inference_family)
     submission_hash = digest_token(token)
     submission = fetch_one(conn, """SELECT * FROM verification_submissions
         WHERE token_hash=%s AND organisation_id=%s FOR UPDATE""", (submission_hash, organisation_id))
@@ -272,11 +281,22 @@ def submit_request(conn, organisation_id: int, token: str, prepared: PreparedReq
     reference = public_reference()
     now = utcnow_naive()
 
-    if prepared.claim == ClaimCode.AGE_COMPARE:
-        attempt = reserve_age_attempt(conn, organisation_id, pseudonym, now=now)
+    if inference_family:
+        attempt = reserve_inference_attempt(
+            conn, organisation_id, pseudonym, inference_family, now=now)
         if not attempt.allowed:
             return deny_inference_attempt(conn, organisation_id, pseudonym,
                                           prepared.claim.value, attempt.reason_code, submission_hash)
+        if prepared.claim == ClaimCode.AGE_COMPARE:
+            finalize_inference_attempt(
+                conn, organisation_id, pseudonym, inference_family,
+                prepared.condition.operator, prepared.condition.threshold_low,
+                prepared.condition.threshold_high)
+        else:
+            finalize_inference_attempt(
+                conn, organisation_id, pseudonym, inference_family,
+                prepared.condition.operator,
+                condition_fingerprint(prepared.condition.allowed_values))
 
     if policy.requires_approval:
         result_code, issued_at, expires_at = "PENDING", None, now + CONSENT_TTL
@@ -321,9 +341,6 @@ def submit_request(conn, organisation_id: int, token: str, prepared: PreparedReq
         audit(conn, "CONSENT_SENT", "SYSTEM", None, reference,
               {"claim_code": prepared.claim.value, "delivery": delivery_status})
     else:
-        if prepared.claim == ClaimCode.AGE_COMPARE:
-            finalize_age_attempt(conn, organisation_id, pseudonym, prepared.condition.operator,
-                                 prepared.condition.threshold_low, prepared.condition.threshold_high)
         audit_detail = {"claim_code": prepared.claim.value, "result": result_code}
         if identity_failure_reason:
             audit_detail["internal_reason_code"] = identity_failure_reason

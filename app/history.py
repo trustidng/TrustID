@@ -170,6 +170,7 @@ def organisation_receipt(conn, organisation_id: int, transaction_id: str) -> dic
         "subject_reference": payload["subject_reference"], "issued": wat_time(receipt["issued_at"]),
         "expires": wat_time(receipt["expires_at"]), "purpose": row["purpose"],
         "verification_link": verification_url(row["verification_token"]),
+        "offline_verification_link": verification_url(row["verification_token"]) + "/offline",
     }
 
 

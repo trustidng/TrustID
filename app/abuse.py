@@ -8,6 +8,9 @@ from .db import execute, fetch_all, fetch_one
 
 AGE_WINDOW = timedelta(minutes=30)
 AGE_ATTEMPT_LIMIT = 3
+INFERENCE_WINDOW = timedelta(minutes=30)
+INFERENCE_ATTEMPT_LIMIT = 3
+PROTECTED_CLAIM_FAMILIES = {"AGE", "NAME_MATCH", "RESIDENCE"}
 BLOCK_MESSAGE = "This verification cannot continue because too many similar requests were made recently. Please try again later."
 
 
@@ -19,57 +22,93 @@ class AttemptDecision:
     reason_code: str | None = None
 
 
-def acquire_age_guard(conn, organisation_id: int, identifier: str) -> None:
+def acquire_inference_guard(conn, organisation_id: int, identifier: str, claim_family: str) -> None:
+    family = claim_family.strip().upper()
+    if family not in PROTECTED_CLAIM_FAMILIES:
+        raise ValueError("Unsupported inference-risk claim family")
     digest = hashlib.sha256(identifier.encode("utf-8")).hexdigest()[:24]
-    lock_name = f"trustid:age:{organisation_id}:{digest}"
+    lock_name = f"trustid:inference:{family}:{organisation_id}:{digest}"
     acquired = fetch_one(conn, "SELECT GET_LOCK(%s,5) acquired", (lock_name,))
     if not acquired or acquired["acquired"] != 1:
-        raise RuntimeError("Unable to acquire age-verification guard")
+        raise RuntimeError("Unable to acquire inference-risk guard")
 
 
-def reserve_age_attempt(conn, organisation_id: int, citizen_reference: str, *, now=None,
-                        limit: int = AGE_ATTEMPT_LIMIT, window: timedelta = AGE_WINDOW) -> AttemptDecision:
+def reserve_inference_attempt(conn, organisation_id: int, citizen_reference: str, claim_family: str,
+                              *, now=None, limit: int = INFERENCE_ATTEMPT_LIMIT,
+                              window: timedelta = INFERENCE_WINDOW) -> AttemptDecision:
+    family = claim_family.strip().upper()
+    if family not in PROTECTED_CLAIM_FAMILIES:
+        raise ValueError("Unsupported inference-risk claim family")
     moment = now or utcnow_naive()
     execute(conn, """INSERT IGNORE INTO inference_guards
         (organisation_id,subject_reference,claim_family,last_activity_at)
-        VALUES (%s,%s,'AGE',%s)""", (organisation_id, citizen_reference, moment))
+        VALUES (%s,%s,%s,%s)""", (organisation_id, citizen_reference, family, moment))
     fetch_one(conn, """SELECT organisation_id FROM inference_guards
-        WHERE organisation_id=%s AND subject_reference=%s AND claim_family='AGE' FOR UPDATE""",
-        (organisation_id, citizen_reference))
+        WHERE organisation_id=%s AND subject_reference=%s AND claim_family=%s FOR UPDATE""",
+        (organisation_id, citizen_reference, family))
     recent = fetch_one(conn, """SELECT COUNT(*) count FROM request_history
-        WHERE organisation_id=%s AND subject_reference=%s AND claim_family='AGE'
+        WHERE organisation_id=%s AND subject_reference=%s AND claim_family=%s
         AND decision='ALLOWED' AND timestamp>%s""",
-        (organisation_id, citizen_reference, moment - window))["count"]
+        (organisation_id, citizen_reference, family, moment - window))["count"]
     total = fetch_one(conn, """SELECT COUNT(*) count FROM request_history
-        WHERE organisation_id=%s AND subject_reference=%s AND claim_family='AGE'
+        WHERE organisation_id=%s AND subject_reference=%s AND claim_family=%s
         AND timestamp>%s""",
-        (organisation_id, citizen_reference, moment - window))["count"]
+        (organisation_id, citizen_reference, family, moment - window))["count"]
     allowed, attempt = recent < limit, total + 1
-    reason = None if allowed else "REPEATED_AGE_VERIFICATION"
+    reason = None if allowed else f"REPEATED_{family}_VERIFICATION"
     execute(conn, """INSERT INTO request_history
         (organisation_id,subject_reference,claim_family,operator,threshold_low,threshold_high,
          decision,attempt_number,reason_code,timestamp)
-        VALUES (%s,%s,'AGE','PENDING',NULL,NULL,%s,%s,%s,%s)""",
-        (organisation_id, citizen_reference, "ALLOWED" if allowed else "BLOCKED", attempt, reason, moment))
+        VALUES (%s,%s,%s,'PENDING',NULL,NULL,%s,%s,%s,%s)""",
+        (organisation_id, citizen_reference, family, "ALLOWED" if allowed else "BLOCKED", attempt, reason, moment))
     history_id = fetch_one(conn, "SELECT LAST_INSERT_ID() id")["id"]
     execute(conn, """UPDATE inference_guards SET last_activity_at=%s
-        WHERE organisation_id=%s AND subject_reference=%s AND claim_family='AGE'""",
-        (moment, organisation_id, citizen_reference))
+        WHERE organisation_id=%s AND subject_reference=%s AND claim_family=%s""",
+        (moment, organisation_id, citizen_reference, family))
     if not allowed:
         audit(conn, "INFERENCE_RISK_FLAGGED", "ORGANISATION", organisation_id,
-              citizen_reference, {"incident_id": history_id, "claim_family": "AGE",
+              citizen_reference, {"incident_id": history_id, "claim_family": family,
                                   "attempt_number": attempt, "reason_code": reason})
     return AttemptDecision(allowed, attempt, recent, reason)
 
 
-def finalize_age_attempt(conn, organisation_id: int, citizen_reference: str,
-                         operator: str, threshold_low, threshold_high) -> None:
+def finalize_inference_attempt(conn, organisation_id: int, citizen_reference: str,
+                               claim_family: str, operator: str,
+                               threshold_low=None, threshold_high=None) -> None:
+    family = claim_family.strip().upper()
+    if family not in PROTECTED_CLAIM_FAMILIES:
+        raise ValueError("Unsupported inference-risk claim family")
     execute(conn, """UPDATE request_history SET operator=%s,threshold_low=%s,threshold_high=%s
-        WHERE organisation_id=%s AND subject_reference=%s AND claim_family='AGE'
+        WHERE organisation_id=%s AND subject_reference=%s AND claim_family=%s
         AND decision='ALLOWED' AND operator='PENDING' ORDER BY id DESC LIMIT 1""",
         (operator, str(threshold_low) if threshold_low is not None else None,
          str(threshold_high) if threshold_high is not None else None,
-         organisation_id, citizen_reference))
+         organisation_id, citizen_reference, family))
+
+
+def condition_fingerprint(values) -> str:
+    """Return a privacy-safe marker for non-age guesses stored in security history."""
+    if isinstance(values, str):
+        values = (values,)
+    normalized = "\x1f".join(" ".join(str(value).split()).casefold() for value in values)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+
+
+# Compatibility wrappers retained for existing integrations and tests.
+def acquire_age_guard(conn, organisation_id: int, identifier: str) -> None:
+    acquire_inference_guard(conn, organisation_id, identifier, "AGE")
+
+
+def reserve_age_attempt(conn, organisation_id: int, citizen_reference: str, *, now=None,
+                        limit: int = AGE_ATTEMPT_LIMIT, window: timedelta = AGE_WINDOW) -> AttemptDecision:
+    return reserve_inference_attempt(conn, organisation_id, citizen_reference, "AGE",
+                                     now=now, limit=limit, window=window)
+
+
+def finalize_age_attempt(conn, organisation_id: int, citizen_reference: str,
+                         operator: str, threshold_low, threshold_high) -> None:
+    finalize_inference_attempt(conn, organisation_id, citizen_reference, "AGE",
+                               operator, threshold_low, threshold_high)
 
 
 def security_overview(conn) -> dict:

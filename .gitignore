@@ -12,3 +12,4 @@ scripts/.tamper_demo_state.json
 *.log
 var/
 app/organisation-evidence/
+trustid_staging.sql

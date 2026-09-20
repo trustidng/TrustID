@@ -28,7 +28,7 @@ from .security import (
     verify_password,
 )
 from .signing import (
-    allow_public_authenticity_check, qr_data_url, validate_signing_configuration,
+    allow_public_authenticity_check, offline_receipt_material, parse_canonical, qr_data_url, validate_signing_configuration,
     verification_url, verify_receipt,
 )
 from .history import organisation_receipt, receipt_count, verification_history, wat_time
@@ -157,14 +157,32 @@ def _balanced_demo_citizens(rows: list[dict], limit: int = 5) -> list[dict]:
     return selected[:limit]
 
 
+DEMO_PASSWORD = "NeuGombe@2026"
+
+
+def _demo_administrator(conn):
+    return fetch_one(conn, """SELECT username,email,full_name FROM admin_users
+        WHERE active=TRUE AND (locked_until IS NULL OR locked_until<=UTC_TIMESTAMP())
+        ORDER BY (username='admin') DESC,id LIMIT 1""")
+
+
+def _demo_organization(conn, public_reference: str):
+    if not re.fullmatch(r"ORG-[A-Z0-9]+", public_reference or ""):
+        return None
+    return fetch_one(conn, """SELECT o.public_reference,o.business_name,o.email,c.name category_name
+        FROM organisations o JOIN organisation_categories c ON c.id=o.category_id
+        WHERE o.public_reference=%s AND o.status='APPROVED' AND c.active=TRUE
+          AND o.email LIKE '%%.test'
+          AND (o.locked_until IS NULL OR o.locked_until<=UTC_TIMESTAMP())""",
+        (public_reference,))
+
+
 @app.get("/demo-credentials", response_class=HTMLResponse)
 def demo_credentials(request: Request):
     with connection() as conn:
         session = current_session(conn, request)
-        administrator = fetch_one(conn, """SELECT username,email,full_name FROM admin_users
-            WHERE active=TRUE AND (locked_until IS NULL OR locked_until<=UTC_TIMESTAMP())
-            ORDER BY (username='admin') DESC,id LIMIT 1""")
-        organization_rows = fetch_all(conn, """SELECT o.business_name,o.email,c.name category_name
+        administrator = _demo_administrator(conn)
+        organization_rows = fetch_all(conn, """SELECT o.public_reference,o.business_name,o.email,c.name category_name
             FROM organisations o JOIN organisation_categories c ON c.id=o.category_id
             WHERE o.status='APPROVED' AND c.active=TRUE AND o.email LIKE '%%.test'
               AND (o.locked_until IS NULL OR o.locked_until<=UTC_TIMESTAMP())
@@ -183,7 +201,7 @@ def demo_credentials(request: Request):
     response = page(request, "demo_credentials.html", session=session, administrator=administrator,
                     organizations=organizations, activated=_balanced_demo_citizens(activated_pool),
                     unactivated=_balanced_demo_citizens(unactivated_pool),
-                    demo_password="NeuGombe@2026", demo_pin="13579")
+                    demo_password=DEMO_PASSWORD, demo_pin="13579")
     response.headers["Cache-Control"] = "no-store, private"
     return response
 
@@ -221,8 +239,16 @@ def failed_citizen_login(conn, citizen_id: int) -> None:
 
 
 @app.get("/admin/login", response_class=HTMLResponse)
-def admin_login_form(request: Request):
-    return page(request, "login.html", title="Admin login", action="/admin/login", identifier_label="Username")
+def admin_login_form(request: Request, demo: int = 0):
+    administrator = None
+    if demo == 1:
+        with connection() as conn:
+            administrator = _demo_administrator(conn)
+    return page(request, "login.html", title="Admin login", action="/admin/login",
+                identifier_label="Username",
+                identifier_value=administrator["username"] if administrator else "",
+                password_value=DEMO_PASSWORD if administrator else "",
+                demo_prefill=bool(administrator))
 
 
 @app.post("/admin/login")
@@ -1036,8 +1062,17 @@ async def org_register(request: Request):
 
 
 @app.get("/organisation/login", response_class=HTMLResponse)
-def org_login_form(request: Request, registered: int = 0):
-    return page(request, "login.html", title="Organisation login", action="/organisation/login", identifier_label="Email", message="Application submitted. You can now sign in to view its status." if registered else None)
+def org_login_form(request: Request, registered: int = 0, demo: str = ""):
+    organization = None
+    if demo:
+        with connection() as conn:
+            organization = _demo_organization(conn, demo.strip().upper())
+    return page(request, "login.html", title="Organisation login", action="/organisation/login",
+                identifier_label="Email",
+                message="Application submitted. You can now sign in to view its status." if registered else None,
+                identifier_value=organization["email"] if organization else "",
+                password_value=DEMO_PASSWORD if organization else "",
+                demo_prefill=bool(organization))
 
 
 @app.post("/organisation/login")
@@ -1392,7 +1427,33 @@ def public_verification_result(request: Request, token: str):
     back_url = (requested_return if requested_return.startswith("/organisation/receipts/")
                 and "?" not in requested_return and "#" not in requested_return else None)
     response = page(request, "public_verification_result.html", state=state, payload=payload,
-                    definition=definition, requirement=requirement, back_url=back_url)
+                    definition=definition, requirement=requirement, back_url=back_url,
+                    offline_url=(f"/verify-result/{token}/offline"
+                                 if state in {"CURRENT", "EXPIRED"} else None))
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    return response
+
+
+@app.get("/verify-result/{token}/offline", response_class=HTMLResponse)
+def offline_verification_file(request: Request, token: str):
+    with connection() as conn:
+        if allow_public_authenticity_check(conn):
+            state, material = offline_receipt_material(conn, token)
+        else:
+            state, material = "UNAVAILABLE", None
+        reference = (parse_canonical(material["canonical_payload"])["verification_id"]
+                     if material else None)
+        audit(conn, "RESULT_AUTHENTICITY_CHECKED", "SYSTEM", None, reference,
+              {"state": state, "channel": "OFFLINE_EXPORT"})
+        conn.commit()
+    if state not in {"CURRENT", "EXPIRED"} or not material:
+        return Response("Offline verification file unavailable.", status_code=404,
+                        media_type="text/plain")
+    response = templates.TemplateResponse(
+        request=request, name="offline_receipt_verifier.html",
+        context={"material": material, "reference": reference},
+        headers={"Content-Disposition": f'attachment; filename="TrustID-{reference}-offline-verifier.html"'},
+    )
     response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
     return response
 
