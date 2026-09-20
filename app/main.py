@@ -28,7 +28,7 @@ from .security import (
     verify_password,
 )
 from .signing import (
-    allow_public_authenticity_check, offline_receipt_material, parse_canonical, qr_data_url, validate_signing_configuration,
+    allow_public_authenticity_check, parse_canonical, qr_data_url, validate_signing_configuration,
     verification_url, verify_receipt,
 )
 from .history import organisation_receipt, receipt_count, verification_history, wat_time
@@ -1427,33 +1427,7 @@ def public_verification_result(request: Request, token: str):
     back_url = (requested_return if requested_return.startswith("/organisation/receipts/")
                 and "?" not in requested_return and "#" not in requested_return else None)
     response = page(request, "public_verification_result.html", state=state, payload=payload,
-                    definition=definition, requirement=requirement, back_url=back_url,
-                    offline_url=(f"/verify-result/{token}/offline"
-                                 if state in {"CURRENT", "EXPIRED"} else None))
-    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
-    return response
-
-
-@app.get("/verify-result/{token}/offline", response_class=HTMLResponse)
-def offline_verification_file(request: Request, token: str):
-    with connection() as conn:
-        if allow_public_authenticity_check(conn):
-            state, material = offline_receipt_material(conn, token)
-        else:
-            state, material = "UNAVAILABLE", None
-        reference = (parse_canonical(material["canonical_payload"])["verification_id"]
-                     if material else None)
-        audit(conn, "RESULT_AUTHENTICITY_CHECKED", "SYSTEM", None, reference,
-              {"state": state, "channel": "OFFLINE_EXPORT"})
-        conn.commit()
-    if state not in {"CURRENT", "EXPIRED"} or not material:
-        return Response("Offline verification file unavailable.", status_code=404,
-                        media_type="text/plain")
-    response = templates.TemplateResponse(
-        request=request, name="offline_receipt_verifier.html",
-        context={"material": material, "reference": reference},
-        headers={"Content-Disposition": f'attachment; filename="TrustID-{reference}-offline-verifier.html"'},
-    )
+                    definition=definition, requirement=requirement, back_url=back_url)
     response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
     return response
 

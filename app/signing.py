@@ -1,6 +1,5 @@
 import base64
 from datetime import datetime, timedelta, timezone
-import hashlib
 from io import BytesIO
 import json
 import secrets
@@ -163,37 +162,6 @@ def verify_receipt(conn, token: str) -> tuple[str, dict | None, dict | None]:
     except (ValueError, TypeError, json.JSONDecodeError, InvalidSignature):
         return "INVALID", None, row
     return state, payload, row
-
-
-def offline_receipt_material(conn, token: str) -> tuple[str, dict | None]:
-    """Build the privacy-safe material needed to verify an existing receipt offline.
-
-    The package deliberately contains the exact canonical string that was signed rather
-    than a regenerated representation. Existing receipts therefore remain compatible.
-    """
-    state, payload, receipt = verify_receipt(conn, token)
-    if state not in {"CURRENT", "EXPIRED"} or not payload or not receipt:
-        return state, None
-    key = fetch_one(conn, """SELECT key_id,algorithm,public_key_b64,status
-        FROM signing_keys WHERE key_id=%s""", (receipt["signing_key_id"],))
-    if (not key or key["status"] == "REVOKED" or key["algorithm"] != "Ed25519"):
-        return "INVALID", None
-    try:
-        public_key = base64.b64decode(key["public_key_b64"], validate=True)
-        signature = base64.b64decode(receipt["signature"], validate=True)
-    except (ValueError, TypeError):
-        return "INVALID", None
-    if len(public_key) != 32 or len(signature) != 64:
-        return "INVALID", None
-    return state, {
-        "format": "trustid-offline-receipt-v1",
-        "algorithm": "Ed25519",
-        "key_id": key["key_id"],
-        "public_key_b64": key["public_key_b64"],
-        "public_key_sha256": hashlib.sha256(public_key).hexdigest(),
-        "canonical_payload": receipt["canonical_payload"],
-        "signature_b64": receipt["signature"],
-    }
 
 
 def verification_url(token: str) -> str:
